@@ -43,8 +43,6 @@ var workerVmNames = [for i in range(0, numWorker): {
 }]
 var vmObject = concat(cpVmNames, workerVmNames)
 
-// Script content for Kubernetes cluster creation
-var commonPrerequisiteConfig = loadTextContent('scripts/common-prerequisites.sh', 'utf-8')
 
 // Provision NSG and allow 22 and 6443
 module nsg 'modules/nsg.bicep' = {
