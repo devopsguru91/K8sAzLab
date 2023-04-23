@@ -1,17 +1,11 @@
 // Name        : main.bicep
 // Description : Implements template needed to provision a Kubernetes cluster using Ubuntu VMs on Azure
 // Version     : 0.1.0
-// Author      : github.com/rchaganti
 
 // parameters
 @description('Location for all resources.')
 param location string = resourceGroup().location
 
-@description('Specifies the name of the Azure Storage account.')
-param storageAccountName string
-
-@description('Specifies the SMB share name for sharing files between nodes.')
-param storageFileShareName string = 'temp'
 
 @description('Number of control plane VMs.')
 @allowed([
@@ -35,11 +29,7 @@ param authenticationType string = 'password'
 @secure()
 param passwordOrKey string
 
-@description('CNI plugin to install.')
-param cniPlugin string = 'calico'
 
-@description('CNI Pod Network CIDR.')
-param cniCidr string = '10.244.0.0/16'
 
 // variables
 var cpVmNames = [for i in range(0, numCP): {
@@ -55,9 +45,6 @@ var vmObject = concat(cpVmNames, workerVmNames)
 
 // Script content for Kubernetes cluster creation
 var commonPrerequisiteConfig = loadTextContent('scripts/common-prerequisites.sh', 'utf-8')
-var kubeadmInit = loadTextContent('scripts/kubeadmInit.sh','utf-8')
-var cniInstall = loadTextContent('scripts/cniPlugin.sh','utf-8')
-var finalizeDeploy = loadTextContent('scripts/finalizeDeploy.sh','utf-8')
 
 // Provision NSG and allow 22 and 6443
 module nsg 'modules/nsg.bicep' = {
@@ -151,116 +138,6 @@ resource cse 'Microsoft.Compute/virtualMachines/extensions@2022-03-01' = [for (v
   }
 }]
 
-// Perform kubeadm init on cplane1
-module kubeadmInitMrc 'modules/managedRunCmd.bicep' = {
-  name: 'kubeadmInitMrc'
-  dependsOn: cse
-  params: {
-    configType: 'kubeadminit'
-    location: location
-    vmName: 'cplane1'
-    scriptContent: kubeadmInit
-    scriptParams: [
-      {
-        value: cniCidr
-      }
-    ]
-  }
-}
-
-// Provision storage account, container, and file share
-module storageAccount 'modules/storage.bicep' = {
-  name: 'sa'
-  dependsOn: [
-    kubeadmInitMrc
-  ]
-  params: {
-    location: location
-    storageAccountName: storageAccountName
-    storageFileShareName: storageFileShareName
-  }
-}
-
-// Install CNI plugin
-module cniInstallMrc 'modules/managedRunCmd.bicep' = {
-  name: 'CniInstallMrc'
-  dependsOn: [
-    storageAccount
-  ]
-  params: {
-    configType: 'cniInstall'
-    location: location
-    vmName: 'cplane1'
-    scriptContent: cniInstall
-    scriptParams: [
-      {
-        value: username
-      }
-      {
-        value: cniPlugin
-      }
-      {
-        value: cniCidr
-      }
-    ]
-  }
-}
-
-// Generate kubedam join command on control plane
-module finalizeDeployCPMrc 'modules/managedRunCmd.bicep' = {
-  name: 'finalizeDeployCP'
-  dependsOn: [
-    cniInstallMrc
-  ]
-  params: {
-    configType: 'finalizeDeployCP'
-    location: location
-    vmName: 'cplane1'
-    scriptContent: finalizeDeploy
-    scriptParams: [
-      {
-        value: storageAccountName
-      }
-      {
-        value: storageAccount.outputs.storage.storageKey
-      }
-      {
-        value: storageAccount.outputs.storage.shareUri
-      }
-      {
-        value: 'cp'
-      }
-    ]
-  }
-}
-
-// Join nodes to the Kubernetes cluster
-module finalizeDeployWorkerMrc 'modules/managedRunCmd.bicep' = [for vm in vmObject: if (vm.role == 'worker') {
-  name: '${vm.name}-finalizeDeployWorker'
-  dependsOn: [
-    finalizeDeployCPMrc
-  ]
-  params: {
-    configType: 'finalizeDeployWorker'
-    location: location
-    vmName: vm.name
-    scriptContent: finalizeDeploy
-    scriptParams: [
-      {
-        value: storageAccountName
-      }
-      {
-        value: storageAccount.outputs.storage.storageKey
-      }
-      {
-        value: storageAccount.outputs.storage.shareUri
-      }
-      {
-        value: 'worker'
-      }
-    ]
-  }
-}]
 
 // Retrieve output
 output vmInfo array = [for (vm, i) in vmObject: {
